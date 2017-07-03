@@ -1,0 +1,131 @@
+; 版面数据处理的例子
+; 以形成 SPT 图形文件为例
+
+1. 登记版面处理回调地址
+
+                ...
+                ...
+                mov     dx,offset spt_entry
+                mov     ax,9535h
+                mov     bh,3
+                int     10h             ; DS:DX= 登记的版面数据处理程序地址
+                ...
+                ...
+                开始打印工作
+                ...
+                ...
+
+
+2. 编写版面数据回调程序, 分别处理回调功能即可.
+
+Spt_entry:
+                cmp     ax,9517h
+                jz      short ok17h     ; 只处理AX=9517h的功能
+                iret
+ok17h:
+                cmp     bh,4            ; BH= 子功能4
+                jnz     short no17_4
+                mov     al,1
+                iret
+no17_4:
+                cmp     bh,1            ; BH= 子功能1
+                jnz     short no17_1
+                pusha
+                shl     cx,3            ; 宽度字节转为宽度点
+                mov     cs:spt_wide,cx
+                add     cs:spt_high,dx
+                mov     ax,dx
+                add     cx,7
+                shr     cx,3
+                mul     cx
+                mov     cx,ax
+                mov     dx,si
+                push    cx
+xncx:
+                xor     byte ptr ds:[si],0FFh   ; 异或版面数据(SPT要求)
+                inc     si
+                loop    xncx
+                pop     cx
+                mov     bx,cs:handlepian
+                mov     ah,40h
+                int     21h             ; 数据写入文件
+                popa
+iret17:
+                iret
+
+no17_1:
+                cmp     bh,2            ; BH= 子功能2
+                jnz     short iret17
+                push    ds
+                pusha
+                push    cs
+                pop     ds
+                add     cure_top,cx
+                mov     ax,cure_top
+                cmp     ax,spt_high
+                jbe     short paret
+                sub     ax,spt_high
+                add     spt_high,ax
+                mov     cx,ax           ; 换行总行数
+                or      cx,cx
+                jz      short paret
+                push    cx
+                push    di
+                mov     cx,dx
+                mov     al,0FFh
+                cld
+                repz    stosb
+                pop     di
+                pop     cx
+                push    es
+                pop     ds
+nzisp:
+                push    cx
+                push    dx
+                mov     cx,dx           ; 每行宽度字节
+                mov     bx,cs:handlepian
+                mov     dx,di
+                mov     ah,40h
+                int     21h
+                pop     dx
+                pop     cx
+                loop    nzisp
+paret:
+                popa
+                pop     ds
+                iret
+
+
+3. 打印过程结束后, 应该取消排版数据的回调
+
+   一般情况下, 打印什么时候结束总是可以由应用程序控制的, 当打印工作结
+束时, 应该做收尾工作.
+
+
+spt_over:
+                cmp     if_spt,0
+                jz      short no_spt
+                mov     bx,handlepian
+                xor     cx,cx
+                xor     dx,dx
+                mov     ax,4200h
+                int     21h             ; 指针移至文件头
+                mov     bx,handlepian
+                mov     cx,64d
+                mov     dx,offset SPT_head
+                mov     ah,40h
+                int     21h             ; 写出最终SPT文件头内容
+                mov     bx,handlepian
+                mov     ah,3eh
+                int     21h
+                mov     ax,9535h
+                mov     bh,3
+                xor     dx,dx
+                mov     ds,dx
+                int     10h             ; 取消版面处理程序
+                push    cs
+                pop     ds
+                mov     if_spt,0
+no_spt:
+                retn
+

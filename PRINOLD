@@ -1,0 +1,627 @@
+; ┏━━━━━━━━━━━━━━━━┓
+; ┃ 文件名   : SE_PRIN.INC         ┃
+; ┃ 版本号   : 2.1                 ┃
+; ┃ 作  者   : 简晶                ┃
+; ┃ 日  期   : 1991,12 - 92,4      ┃
+; ┃                                ┃
+; ┃ 版权所有 (★)Starsoft Corp,.   ┃
+; ┃ Allright reserved              ┃
+; ┗━━━━━━━━━━━━━━━━┛
+;
+; 本文件包含 SE 的打印模块，有以下几个子程序
+; ---------------------------------------------------------------
+; Print_File   打印主模块，判断是否分栏，并包含直接打印模块 NoFen
+; FenLan       分栏打印模块
+; Spc&Chi&Jia  打印栏间空格, 然后处理吃空与加空
+; PrintBegin   打印机初始化, 并等待按任意键
+; PrintSpc     具体打印栏间距模块
+; PrintChr     往打印机输送一个字符
+; Cr&Lf        打印中换行, 并处理疏密方式
+; WaitPress    打印一页后, 等待换页按键
+; PressESC     打印过程中判别是否有按 ESC
+; PageLayout   打印方式设置
+;----------------------------------------------------------------
+
+Print_File:
+                mov     no_P48,0
+                Call    PageLayout
+                cmp     no_P48,0
+                jnz     short notps
+                call    if_to_spt
+notps:
+                Call    PrintBegin
+                Cmp     Al,27
+                Jnz     Print_Ov
+                Jmp     ESC_Over        ; 按 ESC 返回
+Print_Ov:
+                Call    Setpos_Dh
+                Mov     Si,OFFSET ESCret
+                mov     byte ptr if_color,0
+                Call    DispAtr
+                mov     byte ptr if_color,1
+                Mov     Al,LanShu       ; 栏数=0,不分栏
+                Or      Al,Al
+                Jz      NoFen
+                Jmp     FenLan          ; 转分栏打印
+NoFen:
+                Mov     Col,0
+                Mov     Row,0
+                Call    Calps1
+Q1_Next:
+                Mov     Es,Siseg
+                Mov     Al,Es:[Si]
+                Cmp     Al,8            ; 跳过 ^H 不打印
+                jz      short Q2_next
+                Cmp     Al,1ah          ; 直到文件结束
+                Jz      One_End
+                Cmp     Al,0dh          ; 剔除回车符及 0
+                Jz      CrLfok
+                Cmp     Al,0ah
+                Jz      CrLfok
+                cmp     al,0FFh
+                jz      short nff1a
+                Cmp     Al,7fh
+                Jnz     Nop@
+nff1a:
+                mov     Al,20h
+Nop@:
+                Or      Al,Al
+                Jz      Q2_Next         ; 跳过 0
+Yesp@:
+                Call    PrintChr        ; 打印一字符 AL
+Q2_Next:
+                Call    Si_inc
+                Jmp     SHORT Q1_Next
+;-----------------------------------------
+CrLfok:
+                Call    Cr&Lf
+                call    si_inc
+                cmp     PageLines,0
+                jz      short Bpage     ; 打印不分页, 转
+                Inc     Row
+                Mov     Al,Row
+                Cmp     Al,PageLines
+                Jb      Bpage
+                Mov     Row,0
+                Call    WaitPress
+                Cmp     Al,27
+                Jz      One_End
+Bpage:
+                Call    PressESC        ; ESC 返回
+                jz      short one_end
+                Jmp     short Q1_Next
+One_End:
+                Jmp     Print_Over
+
+Chi&Jia:
+                Call    Si_inc
+                Mov     Es,Siseg
+                Mov     Al,Es:[Si]
+                Cmp     Al,'A'          ; A-Z 吃空
+                Jae     Chiok1
+Chi1:           Call    Si_dec          ; 跳过打印(即缩进半个汉字)
+                Jmp     SHORT Nopppok
+Chiok1:         Cmp     Al,'Z'
+                Ja      Nochi
+                Sub     Al,'A'          ; 得字节数
+                Add     Chi,Al          ; 加入 Chi
+Chi2:           Sub     Cl,2
+                Jmp     SHORT Spcok
+Nochi:          Cmp     Al,'a'          ; a-z 加空
+                Jb      Chi1
+                Cmp     Al,'z'
+                Ja      Chi1
+                Sub     Al,'a'
+                Add     Jia,Al          ; 加入 Jia
+                Jmp     SHORT Chi2
+
+FenLan:
+                Mov     Ax,FileRow      ; 从当前光标行开始打印
+                Mov     PrintLine,Ax    ; 计数
+                Mov     Row,0
+Print_Next:
+                Mov     Cl,LanShu
+                Xor     Ch,Ch
+P_N_L:
+                Push    Cx
+                Mov     Col,0
+                Mov     Chi,0           ; 每栏打印前,初始吃/加空格为 0
+                Mov     Jia,0
+                Call    Calps1
+                Mov     Cl,File_Wide
+                Inc     Cl
+                Shl     Cl,1            ; 取排版宽度+1 -> CL
+Qu_Next:
+                Mov     Es,Siseg
+                Mov     Al,Es:[Si]
+                Cmp     Al,8            ; Ctrl H 吃(A-Z)/加(a-z)空
+                Jz      Chi&Jia
+                Cmp     Al,1ah
+                Jz      Spcok1
+                Cmp     Al,0dh          ; 剔除回车符
+                Jz      Spcok
+                Cmp     Al,0ah
+                Jz      Spcokok1        ; 0Ah 码打印出字符 '\'
+                Cmp     Al,7fh          ; 将 7Fh 码转换成 0 码
+                Jnz     No2@
+                Xor     Al,Al
+                Jmp     SHORT Nospcok
+Spcokok1:       Mov     Al,'\'
+                Jmp     SHORT Nospcok
+No2@:           Or      Al,Al           ; 剔除 0
+                Jnz     Nospcok
+Spcok:          Mov     Al,20h
+Nospcok:        Call    PrintChr        ; 打印一字符 AL
+Nopppok:        Call    Si_inc
+                Loop    Qu_Next         ; 直到打印完一栏
+                Pop     Cx
+                Push    Cx
+                Cmp     Cx,1
+                Jbe     Spcok1          ; 最后一栏不打栏间距及吃/加空
+                Call    Spc&Chi&Jia     ; 栏间距/吃空/加空
+Spcok1:
+                Inc     PrintLine       ; 已打印行数计数
+                Pop     Cx
+                Mov     Ax,FileRow
+                Mov     Bl,PageLines
+                Xor     Bh,Bh
+Spk3:
+                Add     Ax,Bx
+                Mov     FileRow,Ax
+                Cmp     Ax,FileRowt
+                Jb      Spk2
+                Loop    Spk3
+                Mov     Cl,1
+Spk2:
+                Loop    P_N_L           ; 下一栏
+Line_End:
+                Call    Cr&Lf           ; 换行
+                Call    PressESC
+                Jz      Print_Over
+                Inc     Row
+                Mov     Ax,PrintLine
+                Cmp     Ax,FileRowt     ; 打印结束
+                Jae     Print_Over
+                Mov     Al,Row
+                Cmp     Al,PageLines
+                Jae     Page_ok
+                Mov     Ax,FileRow
+                Mov     Bl,PageLines
+                Xor     Bh,Bh
+                Mov     Cl,LanShu
+TuiNl:          Sub     Ax,Bx           ; 后退相应栏数
+                Loop    TuiNL
+                Inc     Ax
+                Mov     FileRow,Ax
+                Jmp     Print_Next      ; 本页未打印完,继续
+Page_ok:        Call    WaitPress       ; 按键换页,下一页
+                Cmp     Al,27           ; ESC 返回
+                Jz      Print_Over
+                Mov     Ax,FileRow
+                Mov     Bl,PageLines
+                Xor     Bh,Bh
+                Mov     Row,0
+                Sub     Ax,Bx
+                Inc     Ax
+                Mov     FileRow,Ax
+                Jmp     Print_Next
+Print_Over:
+                mov     ax,9517h
+                mov     bh,4
+                int     10h
+                or      al,al
+                jz      short al0c
+                mov     ax,0e07h
+                int     10h
+                call    inkey
+                mov     ax,9514h
+                mov     bh,4
+                int     10h             ; 恢复屏幕
+                jmp     short ESC_over
+al0c:
+                Mov     Al,0Ch
+                Call    PrintChr        ; 换页
+ESC_over:
+                Call    Earse
+                call    spt_over
+                Call    SetPos_dh
+                Mov     Si,OFFSET PrintOver
+                Call    Dispatr&Inkey
+                Retn
+
+Spc&Chi&Jia:
+                Call    PrintSpc        ; 打印栏间距
+ChiNxt:         Cmp     Chi,0           ; 吃空(汉字)
+                Jz      IfJia
+                Mov     Al,8
+                Call    PrintChr
+                Dec     Chi
+                Jmp     SHORT ChiNxt
+IfJia:          Cmp     Jia,0           ; 打印加空(西文)
+                Jz      SpcCJr
+                Mov     Al,20h
+                Call    PrintChr
+                Dec     Jia
+                Jmp     SHORT IfJia
+SpcCJr:         Ret
+
+PrintBegin:
+                Call    SetPos_dh
+                Mov     Si,OFFSET PleaseReady
+                Call    Dispatr&Inkey
+                Ret
+
+PrintSpc:
+                Mov     Cl,LanSpc
+                Or      Cl,Cl
+                Jz      Psr             ; 栏间距为0,直接返回
+                Xor     Ch,Ch
+PrintSpc1:      Mov     Al,20h
+                Call    PrintChr
+                Loop    PrintSpc1
+PSr:            Ret
+
+PrintChr:
+                Xor     Ah,Ah
+                Xor     Dx,Dx
+                Int     17h
+                Ret
+
+Cr&Lf:
+                Mov     Al,0dh
+                Call    PrintChr
+                Mov     Al,0ah
+                Call    PrintChr
+                Cmp     Su,0
+                Jz      Mi
+                Mov     Al,0dh          ; 疏方式, 每行间空一行
+                Call    PrintChr
+                Mov     Al,0ah
+                Call    PrintChr
+Mi:             Ret
+
+WaitPress:
+                mov     al,0Ch
+                call    PrintChr
+                Push_si
+                Call    Setpos_dh
+                Mov     Si,OFFSET Wait_Print
+                Call    Dispatr&Inkey
+                Push    Ax              ; 保存按键
+                Call    Setpos_dh
+                Mov     Si,OFFSET ESCret
+                mov     byte ptr if_color,0
+                Call    Dispatr
+                mov     byte ptr if_color,1
+                Pop     Ax
+                Pop_si
+                Ret
+
+PressESC:
+                Mov     Ah,1
+                Xor     Al,Al
+                Int     16h
+                Jz      NoKp
+                Xor     Ah,Ah
+                Int     16h
+Nokp:
+                or      al,al
+                jz      short Escrt
+                Cmp     Al,3    ;27
+Escrt:
+                Retn
+
+if_to_spt:
+                Call    Setpos_Dh
+                mov     si,offset if_SPTfile
+                Call    Dispatr&inkey
+                and     al,0DFh
+                cmp     al,'Y'
+                jz      short if_to_spt1
+                retn
+if_to_spt1:
+                Call    Setpos_Dh
+                mov     si,offset SPT_file
+                call    inputname       ; 输入SPT文件名
+                or      ch,ch
+                jnz     short spt_yes   ; 直接按回车, 返回直接打印
+                retn
+spt_yes:
+                Mov     BYTE PTR [Si],0 ; 文件名以 0 结束
+                xor     cx,cx
+                Mov     Ah,5Bh
+                Mov     Dx,OFFSET PianFileName
+                Int     21h             ; 建立文件
+                jnc     short oksptfile
+                cmp     al,50h
+                jz      short fileexist ; 文件已存在, 转
+                Call    Geterrmsg
+                Call    Setpos_dh
+                Call    Dispatr&inkey   ; 按任意键返回
+                jmp     short if_to_spt1
+fileexist:
+                mov     ax,0e07h
+                int     10h
+                Call    Setpos_dh
+                mov     si,offset spt_er1
+                Call    Dispatr&inkey
+                and     al,0DFh
+                cmp     al,'Y'
+                jnz     short if_to_spt1
+                xor     cx,cx
+                xor     cx,cx
+                Mov     Ah,3Ch
+                Mov     Dx,OFFSET PianFileName
+                Int     21h             ; 建立文件
+oksptfile:
+                mov     word ptr spt_wide,0
+                mov     word ptr spt_high,0
+                mov     word ptr cure_top,0
+                mov     Handlepian,ax
+                mov     bx,ax
+                mov     cx,64d
+                mov     dx,offset SPT_head
+                mov     ah,40h          ; 先写出SPT文件头内容
+                int     21h             ; (预留64个字节的文件头)
+                mov     dx,offset spt_entry
+                mov     ax,9535h
+                mov     bh,3
+                int     10h             ; 登记版面数据处理程序地址
+                mov     if_spt,1
+                retn
+
+spt_over:
+                cmp     if_spt,0
+                jz      short no_spt
+                mov     bx,handlepian
+                xor     cx,cx
+                xor     dx,dx
+                mov     ax,4200h
+                int     21h             ; 指针移至文件头
+                mov     bx,handlepian
+                mov     cx,64d
+                mov     dx,offset SPT_head
+                mov     ah,40h
+                int     21h             ; 写出最终SPT文件头内容
+                mov     bx,handlepian
+                mov     ah,3eh
+                int     21h
+                mov     ax,9535h
+                mov     bh,3
+                xor     dx,dx
+                mov     ds,dx
+                int     10h             ; 取消版面处理程序
+                push    cs
+                pop     ds
+                mov     if_spt,0
+no_spt:
+                retn
+
+Spt_entry:
+                cmp     ax,9517h
+                jz      short ok17h
+                iret
+ok17h:
+                cmp     bh,4
+                jnz     short no17_4
+                mov     al,1
+                iret
+no17_4:
+                cmp     bh,1
+                jnz     short no17_1
+                pusha
+                shl     cx,3            ; 宽度字节转为宽度点
+                mov     cs:spt_wide,cx
+                add     cs:spt_high,dx
+                mov     ax,dx
+                add     cx,7
+                shr     cx,3
+                mul     cx
+                mov     cx,ax
+                mov     dx,si
+                push    cx
+xncx:
+                xor     byte ptr ds:[si],0FFh   ; 异或版面数据(SPT要求)
+                inc     si
+                loop    xncx
+                pop     cx
+                mov     bx,cs:handlepian
+                mov     ah,40h
+                int     21h             ; 数据写入文件
+                popa
+iret17:
+                iret
+
+no17_1:
+                cmp     bh,2
+                jnz     short iret17
+                push    ds
+                pusha
+                push    cs
+                pop     ds
+                add     cure_top,cx
+                mov     ax,cure_top
+                cmp     ax,spt_high
+                jbe     short paret
+                sub     ax,spt_high
+                add     spt_high,ax
+                mov     cx,ax           ; 换行总行数
+                or      cx,cx
+                jz      short paret
+                push    cx
+                push    di
+                mov     cx,dx
+                mov     al,0FFh
+                cld
+                repz    stosb
+                pop     di
+                pop     cx
+                push    es
+                pop     ds
+nzisp:
+                push    cx
+                push    dx
+                mov     cx,dx           ; 每行宽度字节
+                mov     bx,cs:handlepian
+                mov     dx,di
+                mov     ah,40h
+                int     21h
+                pop     dx
+                pop     cx
+                loop    nzisp
+paret:
+                popa
+                pop     ds
+                iret
+
+Nokpr:          Jmp     Earse
+
+PageLayout:
+                mov     ax,95fdh
+                int     10h
+                cmp     ax,0310h
+                jb      short nop48
+                or      cl,cl
+                jz      short nop48
+                mov     ah,80h
+                int     17h
+                cmp     ax,0FF48h
+                jz      short yes_acp48
+nop48:
+                mov     no_p48,1
+                mov     ax,0e07h
+                int     10h
+                Call    Setpos_Dh
+                mov     si,offset no_acp48
+                call    dispatr&inkey
+yes_acp48:
+                mov     byte ptr if_color,0
+                Call    Setpos_Dh
+                Mov     Si,OFFSET Su_Mi         ; 疏/密选择
+                Call    Dispatr
+                Mov     Dl,54   ;52
+                Call    Setpos1_dh
+                Mov     Dl,'['
+                Call    To_Scr
+                Mov     Dl,55   ;53
+                Call    Setpos1_dh
+                Mov     Dl,'Y'
+                Cmp     Su,0
+                Jnz     SuokOK
+                Mov     Dl,'N'
+SuokOK:         Call    To_Scr
+                Mov     Dl,56   ;54
+                Call    Setpos1_dh
+                Mov     Dl,']'
+                Call    To_Scr
+                Mov     Dl,57   ;56
+                mov     dh,edithigh
+                inc     dh
+                Call    Set_bios_pos
+Py_MiSu:        Call    Inkey
+                Jz      Py_MiSu
+                Cmp     Al,27           ; ESC 返回
+                Jz      Nokpr
+                Cmp     Al,0dh          ; ENTER 默认
+                Jz      Py_Lines
+                Call    LowCase1
+                mov     su,0
+                Cmp     Al,'n'          ; 'Y' / 'N' 修改
+                Jz      Py_Lines
+                Cmp     Al,'y'
+                Jnz     Py_MiSu         ; 按键不对, 继续
+                Mov     Su,1
+Py_Lines:
+                Call    Earse
+                Call    Setpos_Dh
+                Mov     Si,OFFSET Line_Num      ; 页行数
+                Call    Dispatr
+                Mov     Al,PageLines
+                Xor     Ah,Ah
+                Mov     Bp,56
+                Call    Show_Num
+                Mov     Dl,63
+                Call    Input_Num
+                Jz      Py_Ret
+                Or      Ch,Ch
+                Jz      Py_FenLan
+                Call    Get_Num
+                Cmp     Ax,200
+                Ja      Py_FenLan
+                Cmp     Su,0
+                Jz      Nohalf
+                Shr     Al,1                    ; 疏方式, 每页行数减半
+Nohalf:
+                Mov     PageLines,Al            ; 0 = 不分页
+                or      al,al
+                jz      short mlsal             ; 不分页=不分栏
+Py_FenLan:
+                Call    Setpos_dh
+                Mov     Si,OFFSET Lan_Num       ; 几栏?
+                mov     byte ptr if_color,0
+                Call    Dispatr
+                mov     byte ptr if_color,1
+                Mov     Al,LanShu
+                Xor     Ah,Ah
+                Mov     Bp,53
+                Call    Show_Num
+                Mov     Dl,60
+                Call    Input_Num
+                Jz      Py_Ret
+                Or      Ch,Ch
+                Jz      Py2
+                Call    Get_Num
+                Cmp     Ax,64
+                Ja      Py2
+mlsal:
+                Mov     LanShu,Al
+Py2:
+                Cmp     LanShu,1
+                Ja      Py_LanSpc               ; 分栏 < 2,返回
+Py_Ret:
+                mov     byte ptr if_color,1
+                Ret
+Py_LanSpc:
+                Call    Setpos_dh
+                Mov     Si,OFFSET Spc_Num       ; 栏间距
+                mov     byte ptr if_color,0
+                Call    Dispatr
+                mov     byte ptr if_color,1
+                Mov     Al,LanSpc
+                Xor     Ah,Ah
+                Mov     Bp,54
+                Call    Show_Num
+                Mov     Dl,61
+                Call    Input_Num
+                Jz      Py_Ret
+                Or      Ch,Ch
+                Jz      Py_Wide
+                Call    Get_Num
+                Cmp     Ax,200
+                Ja      Py_Wide
+                Mov     LanSpc,Al
+Py_Wide:
+                Call    Setpos_dh
+                Mov     Si,OFFSET SetWide       ; 每行宽度
+                mov     byte ptr if_color,0
+                Call    Dispatr
+                mov     byte ptr if_color,1
+                Mov     Al,File_Wide
+                Xor     Ah,Ah
+                Mov     Bp,60
+                Call    Show_Num
+                Mov     Dl,66
+                Call    Input_Num
+                Jz      Py_Ret1
+                Or      Ch,Ch
+                Jz      Py_Ret1
+                Call    Get_Num
+                Cmp     Ax,10
+                Jb      Py_Ret1
+                Cmp     Ax,127
+                Ja      Py_Ret1
+                Mov     File_Wide,Al
+Py_Ret1:
+                mov     byte ptr if_color,1
+                Ret
+
